@@ -1,12 +1,7 @@
 name: Build MT7668 Bluetooth Driver
 
 on:
-  workflow_dispatch:          # 手动触发
-  push:
-    branches: [ coreelec-22 ]
-    paths:
-      - '.github/workflows/build-bt-driver.yml'
-      - 'linux-amlogic/**'    # 内核源码变更时触发（如果作为子模块）
+  workflow_dispatch:
 
 jobs:
   build:
@@ -41,33 +36,28 @@ jobs:
             build-essential libssl-dev bc flex bison \
             libncurses5-dev libelf-dev python3 \
             clang lld llvm git wget curl cpio rsync \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            uuid-dev swig python3-dev
 
       - name: Prepare CoreELEC build environment
         working-directory: CoreELEC
         run: |
-          # 先触发工具链和内核源码准备（会下载官方内核源码）
-          make linux
+          ./scripts/build linux
 
       - name: Replace kernel source with custom linux-amlogic
         working-directory: CoreELEC
         run: |
           KERNEL_DIR=$(find build.CoreELEC-Amlogic-no.aarch64-22/build -maxdepth 1 -name 'linux-*' -type d | head -1)
           echo "Kernel dir: $KERNEL_DIR"
-          # 备份官方 .config 和 Module.symvers
           cp $KERNEL_DIR/.config /tmp/kernel.config
           cp $KERNEL_DIR/Module.symvers /tmp/Module.symvers 2>/dev/null || true
-          # 用自定义源码替换内核源码
           rsync -a --delete ../linux-amlogic/ $KERNEL_DIR/
-          # 恢复构建系统生成的配置和符号表
           cp /tmp/kernel.config $KERNEL_DIR/.config
           cp /tmp/Module.symvers $KERNEL_DIR/Module.symvers 2>/dev/null || true
 
       - name: Clone MT7668 driver source
         run: |
           git clone https://github.com/CoreELEC/MT7668.git MT7668
-          cd MT7668
-          git checkout master
 
       - name: Compile Bluetooth driver
         run: |
@@ -76,7 +66,6 @@ jobs:
 
           cd MT7668/MT7668-Bluetooth
 
-          # 使用 clang/LLVM 进行交叉编译（与 CoreELEC 22 内核一致）
           make -C $KERNEL_DIR \
             M=$(pwd) \
             ARCH=arm64 \
@@ -95,10 +84,6 @@ jobs:
 
       - name: Verify vermagic
         run: |
-          KERNEL_DIR=$(find CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22/build -maxdepth 1 -name 'linux-*' -type d | head -1)
-          echo "=== Kernel vermagic ==="
-          modinfo $KERNEL_DIR/vmlinux 2>/dev/null | grep vermagic || true
-          echo "=== Module vermagic ==="
           modinfo MT7668/MT7668-Bluetooth/bt_mt7668.ko | grep vermagic
 
       - name: Upload driver artifact
@@ -107,11 +92,3 @@ jobs:
           name: bt_mt7668-ko
           path: MT7668/MT7668-Bluetooth/bt_mt7668.ko
           if-no-files-found: error
-
-      - name: Upload kernel image (optional)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_kernel }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-image
-          path: CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22/build/linux-*/arch/arm64/boot/Image.lzo
-          if-no-files-found: warn
