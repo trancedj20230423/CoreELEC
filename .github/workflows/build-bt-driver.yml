@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: trancedj20230423/linux-amlogic
-          ref: amlogic-5.15.196
+          5.15.196_20260306
           path: linux-amlogic
           fetch-depth: 1
 
