@@ -8,9 +8,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
 
-    # 使用 CoreELEC 官方构建镜像，内含完整工具链和预下载源码
+    # 使用正确的 CoreELEC 官方构建镜像
     container:
-      image: coreelec/coreelec-build:latest
+      image: coreelec/coreelec-builder:latest
       options: --user root
 
     steps:
@@ -39,31 +39,22 @@ jobs:
       - name: Patch CoreELEC kernel package to use custom source
         run: |
           cd CoreELEC
-          # 定位 linux 包定义文件
           PKG_FILE=$(find projects/Amlogic-ce -path "*/packages/linux/package.mk" | head -1)
           echo "Package file: $PKG_FILE"
-          if [ -z "$PKG_FILE" ]; then
-            echo "未找到 linux package.mk，尝试搜索..."
-            PKG_FILE=$(find projects -name "package.mk" -exec grep -l "PKG_NAME=\"linux\"" {} \; | head -1)
-            echo "Found: $PKG_FILE"
-          fi
-          # 计算自定义源码的 sha256
+          
           CUSTOM_URL="https://github.com/trancedj20230423/linux-amlogic/archive/refs/heads/5.15.196_20260306.tar.gz"
           echo "Downloading custom kernel source to calculate sha256..."
           curl -L -o /tmp/linux-amlogic.tar.gz "$CUSTOM_URL"
           SHA256=$(sha256sum /tmp/linux-amlogic.tar.gz | cut -d' ' -f1)
-          echo "SHA256: $SHA256"
-          # 替换 PKG_URL 和 PKG_SHA256
+          
           sed -i "s|^PKG_URL=.*|PKG_URL=\"$CUSTOM_URL\"|" "$PKG_FILE"
           sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$SHA256\"|" "$PKG_FILE"
-          echo "--- 修改后的包定义 ---"
           grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
 
       - name: Build kernel only (with full logging)
         run: |
           cd CoreELEC
           export PROJECT=Amlogic-ce DEVICE=Amlogic-no ARCH=aarch64
-          # 将完整日志写入文件，同时输出到控制台
           set -o pipefail
           ./scripts/build linux 2>&1 | tee /tmp/kernel-build.log
         continue-on-error: true
