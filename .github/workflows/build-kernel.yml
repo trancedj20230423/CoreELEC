@@ -6,12 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
-
-    # 使用正确的 CoreELEC 官方构建镜像
-    container:
-      image: coreelec/coreelec-builder:latest
-      options: --user root
+    timeout-minutes: 480
 
     steps:
       - name: Checkout CoreELEC
@@ -29,6 +24,47 @@ jobs:
           path: linux-amlogic
           fetch-depth: 1
 
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            uuid-dev \
+            swig \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            bison \
+            flex \
+            bc \
+            libelf-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            gawk \
+            wget \
+            curl \
+            cpio \
+            rsync \
+            unzip \
+            xz-utils \
+            zstd \
+            git \
+            device-tree-compiler \
+            libxml-parser-perl \
+            libjson-perl \
+            libxml-libxml-perl \
+            xsltproc \
+            default-jre \
+            gperf \
+            texinfo \
+            help2man \
+            autopoint \
+            gettext \
+            pkg-config \
+            zlib1g-dev \
+            libtool-bin
+
       - name: Show custom kernel commit
         run: |
           cd linux-amlogic
@@ -41,12 +77,17 @@ jobs:
           cd CoreELEC
           PKG_FILE=$(find projects/Amlogic-ce -path "*/packages/linux/package.mk" | head -1)
           echo "Package file: $PKG_FILE"
-          
+          if [ -z "$PKG_FILE" ]; then
+            PKG_FILE=$(find projects -name "package.mk" -exec grep -l 'PKG_NAME="linux"' {} \; | head -1)
+            echo "Fallback found: $PKG_FILE"
+          fi
+
           CUSTOM_URL="https://github.com/trancedj20230423/linux-amlogic/archive/refs/heads/5.15.196_20260306.tar.gz"
           echo "Downloading custom kernel source to calculate sha256..."
           curl -L -o /tmp/linux-amlogic.tar.gz "$CUSTOM_URL"
           SHA256=$(sha256sum /tmp/linux-amlogic.tar.gz | cut -d' ' -f1)
-          
+          echo "SHA256: $SHA256"
+
           sed -i "s|^PKG_URL=.*|PKG_URL=\"$CUSTOM_URL\"|" "$PKG_FILE"
           sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$SHA256\"|" "$PKG_FILE"
           grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
