@@ -1,0 +1,93 @@
+name: Build CoreELEC Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    # 使用 CoreELEC 官方构建镜像，内含完整工具链和预下载源码
+    container:
+      image: coreelec/coreelec-build:latest
+      options: --user root
+
+    steps:
+      - name: Checkout CoreELEC
+        uses: actions/checkout@v4
+        with:
+          repository: trancedj20230423/CoreELEC
+          ref: coreelec-22
+          path: CoreELEC
+
+      - name: Checkout custom linux-amlogic
+        uses: actions/checkout@v4
+        with:
+          repository: trancedj20230423/linux-amlogic
+          ref: 5.15.196_20260306
+          path: linux-amlogic
+          fetch-depth: 1
+
+      - name: Show custom kernel commit
+        run: |
+          cd linux-amlogic
+          git log --oneline -3
+          echo "--- hci_core.c 修改检查 ---"
+          grep -n -A 5 "Set Default PHY" net/bluetooth/hci_core.c || true
+
+      - name: Patch CoreELEC kernel package to use custom source
+        run: |
+          cd CoreELEC
+          # 定位 linux 包定义文件
+          PKG_FILE=$(find projects/Amlogic-ce -path "*/packages/linux/package.mk" | head -1)
+          echo "Package file: $PKG_FILE"
+          if [ -z "$PKG_FILE" ]; then
+            echo "未找到 linux package.mk，尝试搜索..."
+            PKG_FILE=$(find projects -name "package.mk" -exec grep -l "PKG_NAME=\"linux\"" {} \; | head -1)
+            echo "Found: $PKG_FILE"
+          fi
+          # 计算自定义源码的 sha256
+          CUSTOM_URL="https://github.com/trancedj20230423/linux-amlogic/archive/refs/heads/5.15.196_20260306.tar.gz"
+          echo "Downloading custom kernel source to calculate sha256..."
+          curl -L -o /tmp/linux-amlogic.tar.gz "$CUSTOM_URL"
+          SHA256=$(sha256sum /tmp/linux-amlogic.tar.gz | cut -d' ' -f1)
+          echo "SHA256: $SHA256"
+          # 替换 PKG_URL 和 PKG_SHA256
+          sed -i "s|^PKG_URL=.*|PKG_URL=\"$CUSTOM_URL\"|" "$PKG_FILE"
+          sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$SHA256\"|" "$PKG_FILE"
+          echo "--- 修改后的包定义 ---"
+          grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
+
+      - name: Build kernel only (with full logging)
+        run: |
+          cd CoreELEC
+          export PROJECT=Amlogic-ce DEVICE=Amlogic-no ARCH=aarch64
+          # 将完整日志写入文件，同时输出到控制台
+          set -o pipefail
+          ./scripts/build linux 2>&1 | tee /tmp/kernel-build.log
+        continue-on-error: true
+
+      - name: Upload full build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-log
+          path: /tmp/kernel-build.log
+          if-no-files-found: warn
+
+      - name: Locate kernel image
+        id: find_image
+        if: always()
+        run: |
+          IMG=$(find CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22/build -name "Image.lzo" -type f | head -1)
+          echo "Found: $IMG"
+          echo "image_path=$IMG" >> $GITHUB_OUTPUT
+
+      - name: Upload kernel image (Image.lzo)
+        if: always() && steps.find_image.outputs.image_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: ${{ steps.find_image.outputs.image_path }}
+          if-no-files-found: error
