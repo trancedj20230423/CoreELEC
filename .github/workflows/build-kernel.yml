@@ -141,7 +141,7 @@ jobs:
 
       - name: Locate kernel image
         id: find_image
-        if: always()
+        if: steps.build_kernel.outputs.build_exit == '0'
         run: |
           set -x
           BUILD_DIR="CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22"
@@ -178,5 +178,5 @@ jobs:
         with:
           name: kernel-image
           path: ${{ steps.find_image.outputs.image_path }}
-          if-no-files-found: error
+          if: steps.build_kernel.outputs.build_exit == '0' && steps.find_image.outputs.image_path !=
           retention-days: 7
