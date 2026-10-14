@@ -93,33 +93,90 @@ jobs:
           grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
 
       - name: Build kernel only (with full logging)
+        id: build_kernel
+        continue-on-error: true
         run: |
+          set -o pipefail
           cd CoreELEC
           export PROJECT=Amlogic-ce DEVICE=Amlogic-no ARCH=aarch64
-          set -o pipefail
-          ./scripts/build linux 2>&1 | tee /tmp/kernel-build.log
-        continue-on-error: true
+
+          LOG_DIR="$GITHUB_WORKSPACE/logs"
+          mkdir -p "$LOG_DIR"
+          LOG_FILE="$LOG_DIR/kernel-build.log"
+
+          echo "::group::环境信息"
+          date -u +'%Y-%m-%d %H:%M:%S UTC'
+          uname -a
+          nproc
+          free -h
+          df -h
+          echo "::endgroup::"
+
+          echo "::group::开始构建内核"
+          set +e
+          stdbuf -oL -eL ./scripts/build linux 2>&1 | tee "$LOG_FILE"
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+
+          echo "build_exit=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
+          echo "内核构建退出码: $BUILD_EXIT"
+          exit $BUILD_EXIT
 
       - name: Upload full build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-build-log
-          path: /tmp/kernel-build.log
+          path: ${{ github.workspace }}/logs/kernel-build.log
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Show build error summary
+        if: always() && steps.build_kernel.outputs.build_exit != '0'
+        run: |
+          echo "::error::内核构建失败，退出码 ${{ steps.build_kernel.outputs.build_exit }}"
+          echo "----- 最后 200 行日志 -----"
+          tail -n 200 "$GITHUB_WORKSPACE/logs/kernel-build.log"
 
       - name: Locate kernel image
         id: find_image
         if: always()
         run: |
-          IMG=$(find CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22/build -name "Image.lzo" -type f | head -1)
-          echo "Found: $IMG"
-          echo "image_path=$IMG" >> $GITHUB_OUTPUT
+          set -x
+          BUILD_DIR="CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22"
+          echo "搜索内核镜像..."
+          find "$BUILD_DIR" -type f \( \
+            -name 'Image.lzo' -o \
+            -name 'Image' -o \
+            -name 'Image.gz' -o \
+            -name 'Image.bz2' -o \
+            -name 'Image.xz' -o \
+            -name 'Image.zst' \
+          \) -print | tee /tmp/kernel_images.txt
 
-      - name: Upload kernel image (Image.lzo)
+          IMG=$(grep -m1 -E '/Image\.lzo$' /tmp/kernel_images.txt || true)
+          if [ -z "$IMG" ]; then
+            IMG=$(grep -m1 -E '/Image$' /tmp/kernel_images.txt || true)
+          fi
+          if [ -z "$IMG" ]; then
+            IMG=$(grep -m1 -E '/Image\.(gz|bz2|xz|zst)$' /tmp/kernel_images.txt || true)
+          fi
+
+          if [ -n "$IMG" ] && [ -f "$IMG" ]; then
+            echo "image_path=$IMG" >> "$GITHUB_OUTPUT"
+            echo "找到镜像: $IMG"
+          else
+            echo "image_path=" >> "$GITHUB_OUTPUT"
+            echo "::error::未找到内核镜像，可能构建失败或输出路径不同"
+            exit 1
+          fi
+
+      - name: Upload kernel image
         if: always() && steps.find_image.outputs.image_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: kernel-image
           path: ${{ steps.find_image.outputs.image_path }}
           if-no-files-found: error
+          retention-days: 7
