@@ -62,18 +62,50 @@ jobs:
           sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$SHA256\"|" "$PKG_FILE"
           grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
 
-      - name: Pre-download pax-utils source
+      - name: Pre-download pax-utils source and patch package.mk
         run: |
-          # 确保 sources 目录存在
-          mkdir -p CoreELEC/sources/pax-utils
-          # 从备用源下载 .tar.bz2 格式 (如果找不到，可以下载 .tar.gz 并重命名)
-          # 这里建议先尝试用 wget 或 curl 下载，并手动校验 sha256
-          curl -L -o CoreELEC/sources/pax-utils/pax-utils-1.3.11.tar.bz2 \
-            https://gitweb.gentoo.org/proj/pax-utils.git/snapshot/pax-utils-1.3.11.tar.bz2 || \
-          curl -L -o CoreELEC/sources/pax-utils/pax-utils-1.3.11.tar.bz2 \
-            https://mirror.rise.ph/gentoo/distfiles/pax-utils-1.3.11.tar.bz2
-          # 校验文件 (如果下载成功)
-          ls -l CoreELEC/sources/pax-utils/
+          cd CoreELEC
+
+          # 创建 sources 目录
+          mkdir -p sources/pax-utils
+
+          # 使用你确认可用的 Ubuntu 链接
+          PAX_URL="https://archive.ubuntu.com/ubuntu/pool/universe/p/pax-utils/pax-utils_1.3.11.orig.tar.gz"
+          echo "Downloading pax-utils from: $PAX_URL"
+
+          # 下载源码
+          curl -L --fail -o /tmp/pax-utils_1.3.11.orig.tar.gz "$PAX_URL" || {
+            echo "::error::Failed to download pax-utils from $PAX_URL"
+            exit 1
+          }
+
+          # 验证文件
+          ls -l /tmp/pax-utils_1.3.11.orig.tar.gz
+
+          # 计算 SHA256
+          PAX_SHA256=$(sha256sum /tmp/pax-utils_1.3.11.orig.tar.gz | cut -d' ' -f1)
+          echo "pax-utils SHA256: $PAX_SHA256"
+
+          # 放入 sources 目录（文件名与 PKG_URL 的 basename 一致）
+          cp /tmp/pax-utils_1.3.11.orig.tar.gz sources/pax-utils/pax-utils_1.3.11.orig.tar.gz
+
+          # 修补 pax-utils 的 package.mk
+          PKG_FILE="packages/devel/pax-utils/package.mk"
+          if [ -f "$PKG_FILE" ]; then
+            echo "=== Patching $PKG_FILE ==="
+            # 更新 PKG_URL 指向 Ubuntu 镜像
+            sed -i "s|^PKG_URL=.*|PKG_URL=\"$PAX_URL\"|" "$PKG_FILE"
+            # 更新 PKG_SHA256
+            if grep -q "^PKG_SHA256=" "$PKG_FILE"; then
+              sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$PAX_SHA256\"|" "$PKG_FILE"
+            else
+              echo "PKG_SHA256=\"$PAX_SHA256\"" >> "$PKG_FILE"
+            fi
+            echo "--- Patched package.mk ---"
+            grep -E "^PKG_URL|^PKG_SHA256|^PKG_VERSION" "$PKG_FILE"
+          else
+            echo "::warning::pax-utils package.mk not found at $PKG_FILE"
+          fi
 
       - name: Build kernel only (with full logging)
         id: build_kernel
