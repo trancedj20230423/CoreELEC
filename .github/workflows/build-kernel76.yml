@@ -1,0 +1,140 @@
+name: Build CoreELEC Kernel (Custom linux-amlogic)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 480
+
+    steps:
+      - name: Checkout CoreELEC
+        uses: actions/checkout@v4
+        with:
+          repository: trancedj20230423/CoreELEC
+          ref: coreelec-22
+          path: CoreELEC
+
+      - name: Checkout custom linux-amlogic (for reference)
+        uses: actions/checkout@v4
+        with:
+          repository: trancedj20230423/linux-amlogic
+          ref: 5.15.196_20260306
+          path: linux-amlogic
+          fetch-depth: 1
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libssl-dev uuid-dev swig python3-dev python3-pip \
+            python3-setuptools bison flex bc libelf-dev libncurses5-dev \
+            libncursesw5-dev gawk wget curl cpio rsync unzip xz-utils zstd \
+            git device-tree-compiler libxml-parser-perl libjson-perl \
+            libxml-libxml-perl xsltproc default-jre gperf texinfo help2man \
+            autopoint gettext pkg-config zlib1g-dev libtool-bin
+
+      - name: Show custom kernel commit
+        run: |
+          cd linux-amlogic
+          git log --oneline -3
+          echo "--- hci_core.c MT7663 修复检查 ---"
+          grep -n -A 12 "Set Default PHY parameters" net/bluetooth/hci_core.c || true
+
+      - name: Patch CoreELEC kernel package to use custom source
+        run: |
+          cd CoreELEC
+          PKG_FILE=$(find projects/Amlogic-ce -path "*/packages/linux/package.mk" | head -1)
+          echo "Package file: $PKG_FILE"
+          if [ -z "$PKG_FILE" ]; then
+            PKG_FILE=$(find projects -name "package.mk" -exec grep -l 'PKG_NAME="linux"' {} \; | head -1)
+            echo "Fallback found: $PKG_FILE"
+          fi
+
+          CUSTOM_URL="https://github.com/trancedj20230423/linux-amlogic/archive/refs/heads/5.15.196_20260306.tar.gz"
+          echo "Downloading custom kernel source to calculate sha256..."
+          curl -L -o /tmp/linux-amlogic.tar.gz "$CUSTOM_URL"
+          SHA256=$(sha256sum /tmp/linux-amlogic.tar.gz | cut -d' ' -f1)
+          echo "SHA256: $SHA256"
+
+          sed -i "s|^PKG_URL=.*|PKG_URL=\"$CUSTOM_URL\"|" "$PKG_FILE"
+          sed -i "s|^PKG_SHA256=.*|PKG_SHA256=\"$SHA256\"|" "$PKG_FILE"
+          grep -E "^PKG_URL|^PKG_SHA256" "$PKG_FILE"
+
+      - name: Build kernel only (with full logging)
+        id: build_kernel
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd CoreELEC
+          export PROJECT=Amlogic-ce DEVICE=Amlogic-no ARCH=aarch64
+
+          LOG_DIR="$GITHUB_WORKSPACE/logs"
+          mkdir -p "$LOG_DIR"
+          LOG_FILE="$LOG_DIR/kernel-build.log"
+
+          echo "::group::环境信息"
+          date -u +'%Y-%m-%d %H:%M:%S UTC'
+          uname -a; nproc; free -h; df -h
+          echo "::endgroup::"
+
+          echo "::group::开始构建内核"
+          set +e
+          stdbuf -oL -eL ./scripts/build linux 2>&1 | tee "$LOG_FILE"
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+
+          echo "build_exit=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
+          echo "内核构建退出码: $BUILD_EXIT"
+          exit $BUILD_EXIT
+
+      - name: Upload full build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-log
+          path: ${{ github.workspace }}/logs/kernel-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Show build error summary
+        if: always() && steps.build_kernel.outputs.build_exit != '0'
+        run: |
+          echo "::error::内核构建失败，退出码 ${{ steps.build_kernel.outputs.build_exit }}"
+          echo "----- 最后 200 行日志 -----"
+          tail -n 200 "$GITHUB_WORKSPACE/logs/kernel-build.log"
+
+      - name: Locate kernel image
+        id: find_image
+        if: steps.build_kernel.outputs.build_exit == '0'
+        run: |
+          set -x
+          BUILD_DIR="CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22"
+          echo "搜索内核镜像..."
+          find "$BUILD_DIR" -type f \( \
+            -name 'Image.lzo' -o -name 'Image' -o -name 'Image.gz' -o \
+            -name 'Image.bz2' -o -name 'Image.xz' -o -name 'Image.zst' \
+          \) -print | tee /tmp/kernel_images.txt
+
+          IMG=$(grep -m1 -E '/Image\.lzo$' /tmp/kernel_images.txt || true)
+          [ -z "$IMG" ] && IMG=$(grep -m1 -E '/Image$' /tmp/kernel_images.txt || true)
+          [ -z "$IMG" ] && IMG=$(grep -m1 -E '/Image\.(gz|bz2|xz|zst)$' /tmp/kernel_images.txt || true)
+
+          if [ -n "$IMG" ] && [ -f "$IMG" ]; then
+            echo "image_path=$IMG" >> "$GITHUB_OUTPUT"
+            echo "找到镜像: $IMG"
+          else
+            echo "image_path=" >> "$GITHUB_OUTPUT"
+            echo "::error::未找到内核镜像，可能构建失败或输出路径不同"
+            exit 1
+          fi
+
+      - name: Upload kernel image
+        if: always() && steps.build_kernel.outputs.build_exit == '0' && steps.find_image.outputs.image_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: ${{ steps.find_image.outputs.image_path }}
+          retention-days: 7
