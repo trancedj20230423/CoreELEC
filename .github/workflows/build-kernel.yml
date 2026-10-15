@@ -173,10 +173,9 @@ jobs:
           fi
 
       - name: Upload kernel image
-        if: always() && steps.find_image.outputs.image_path != ''
+        if: always() && steps.build_kernel.outputs.build_exit == '0' && steps.find_image.outputs.image_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: kernel-image
           path: ${{ steps.find_image.outputs.image_path }}
-          if: steps.build_kernel.outputs.build_exit == '0' && steps.find_image.outputs.image_path !=
           retention-days: 7
