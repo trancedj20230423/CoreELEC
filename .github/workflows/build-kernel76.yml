@@ -33,7 +33,8 @@ jobs:
             libncursesw5-dev gawk wget curl cpio rsync unzip xz-utils zstd \
             git device-tree-compiler libxml-parser-perl libjson-perl \
             libxml-libxml-perl xsltproc default-jre gperf texinfo help2man \
-            autopoint gettext pkg-config zlib1g-dev libtool-bin
+            autopoint gettext pkg-config zlib1g-dev libtool-bin \
+            lzop liblzo2-dev
 
       - name: Show custom kernel commit
         run: |
