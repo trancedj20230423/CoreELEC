@@ -189,3 +189,27 @@ jobs:
           name: kernel-image
           path: ${{ steps.find_image.outputs.image_path }}
           retention-days: 7
+
+      - name: Locate bluetooth.ko
+        id: find_bluetooth
+        if: steps.build_kernel.outputs.build_exit == '0'
+        run: |
+          BUILD_DIR="CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22"
+          echo "搜索 bluetooth.ko..."
+          find "$BUILD_DIR" -name "bluetooth.ko" -print | tee /tmp/bluetooth_ko.txt
+          BT_KO=$(grep -m1 "bluetooth.ko" /tmp/bluetooth_ko.txt || true)
+          if [ -n "$BT_KO" ] && [ -f "$BT_KO" ]; then
+            echo "bluetooth_ko_path=$BT_KO" >> "$GITHUB_OUTPUT"
+            echo "找到 bluetooth.ko: $BT_KO"
+          else
+            echo "bluetooth_ko_path=" >> "$GITHUB_OUTPUT"
+            echo "::warning::未找到 bluetooth.ko"
+          fi
+
+      - name: Upload bluetooth.ko
+        if: always() && steps.find_bluetooth.outputs.bluetooth_ko_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluetooth-ko
+          path: ${{ steps.find_bluetooth.outputs.bluetooth_ko_path }}
+          retention-days: 7
