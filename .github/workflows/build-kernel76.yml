@@ -36,6 +36,11 @@ jobs:
             autopoint gettext pkg-config zlib1g-dev libtool-bin \
             lzop liblzo2-dev
 
+      - name: Verify lzop installation
+        run: |
+          which lzop
+          lzop --version
+          
       - name: Show custom kernel commit
         run: |
           cd linux-amlogic
